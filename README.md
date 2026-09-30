@@ -6,6 +6,12 @@
   * Working options for macOS 12 and below are `qemu` and `9p`
 * [lima](https://lima-vm.io/docs/installation/)
 
+## Notes
+* `fedora-kde.yml` uses `networks: [{vzNAT: true}]`, so it needs no `socket_vmnet`
+  setup and ignores `_config/networks.yaml`. Its desktop window is a fixed
+  1920x1200, software-rendered (no GPU acceleration) scanout with no clipboard
+  sharing between host and guest.
+
 ## Quickstart
 ```bash
 # install (macOS)
@@ -27,6 +33,9 @@ echo "alias lc='limactl'" >> ~/.bashrc
 
 # create a new instance
 lc start ubuntu-2004.yml --tty=false
+
+# create a KDE Plasma desktop instance (vz driver, opens in a native window)
+lc start fedora-kde.yml --tty=false
 
 # stop the instance
 lc stop ubuntu-2004

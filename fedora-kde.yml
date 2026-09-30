@@ -1,0 +1,119 @@
+# First boot (installs KDE, several minutes):
+#   limactl start fedora-kde.yml --tty=false --timeout 20m
+# Later starts (KDE already installed, provisioning is a no-op):
+#   limactl start fedora-kde.yml --tty=false
+#
+# Fedora + KDE Plasma desktop, shown in a native macOS window via the vz
+# driver. Rendering is software-only (llvmpipe); no GPU acceleration. The
+# window is a fixed 1920x1200 scanout with no clipboard sharing. Login is
+# plasma-login-manager (plasmalogin), which replaced sddm in Fedora 44's KDE
+# spin.
+#
+# Requires Lima >= 2.1.2: earlier versions SIGTRAP crash opening the vz GUI
+# window on macOS 26+ (lima-vm/lima#4743, fixed by lima-vm/lima#5036).
+---
+images:
+  # Bump these in place for each new Fedora release. There is no
+  # template:_images/fedora-44 yet as of Lima 2.1.1 (latest built-in is 43).
+  - location: "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+    arch: "x86_64"
+    digest: "sha256:28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
+  - location: "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/aarch64/images/Fedora-Cloud-Base-Generic-44-1.7.aarch64.qcow2"
+    arch: "aarch64"
+    digest: "sha256:55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b"
+
+# https://lima-vm.io/docs/config/
+
+vmType: vz
+cpus: 8                 # default: 4
+memory: 16GiB           # default: 4GiB
+disk: 100GiB            # default: 100GiB
+
+networks:
+  - vzNAT: true
+
+mountType: virtiofs
+mounts:
+  - location: "~/Downloads"
+    writable: true
+  - location: "/tmp/lima"
+    writable: true
+
+video:
+  display: "vz"
+audio:
+  device: "vz"
+
+vmOpts:
+  vz:
+    rosetta:
+      enabled: true
+      binfmt: true
+
+ssh:
+  # Fedora 43 hits an SELinux policy bug over vsock; 44 has not been
+  # confirmed clean either. https://github.com/lima-vm/lima/issues/4334
+  overVsock: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      command -v plasmashell >/dev/null 2>&1 && exit 0
+      dnf -y install @kde-desktop-environment alsa-utils firefox
+  - mode: system
+    script: |
+      #!/bin/bash
+      # Fedora 44's KDE spin ships plasma-login-manager (plasmalogin), an
+      # sddm fork, instead of sddm. It has no sddm.conf.d-style drop-in dir;
+      # /etc/plasmalogin.conf is the live config file, shipped with the
+      # [Autologin] keys already present but commented out.
+      set -eux -o pipefail
+      grep -q '^User={{.User}}$' /etc/plasmalogin.conf 2>/dev/null && exit 0
+      sed -i \
+        -e 's/^#\?User=.*/User={{.User}}/' \
+        -e 's/^#\?Session=.*/Session=plasma/' \
+        /etc/plasmalogin.conf
+      systemctl enable plasmalogin
+      systemctl set-default graphical.target
+      systemctl isolate graphical.target
+
+probes:
+  - description: "KDE Plasma to be installed"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 1800s bash -c "until command -v plasmashell >/dev/null 2>&1; do sleep 5; done"; then
+        echo >&2 "plasmashell is not installed yet"
+        exit 1
+      fi
+    hint: See "/var/log/cloud-init-output.log" in the guest
+  - description: "plasmalogin to be running"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 60s bash -c "until systemctl is-active plasmalogin >/dev/null 2>&1; do sleep 3; done"; then
+        echo >&2 "plasmalogin is not running yet"
+        exit 1
+      fi
+    hint: See "/var/log/cloud-init-output.log" in the guest
+
+message: |
+  The KDE Plasma desktop opens in a native window when the instance starts
+  (vz driver, software rendering, 1920x1200, no clipboard sharing).
+
+  If the window doesn't appear or was closed:
+  ------
+  limactl start fedora-kde
+  ------
+
+  A fresh instance's first boot installs KDE (several minutes) and can outrun
+  `limactl start`'s default 10-minute wait; pass `--timeout 20m` on that
+  first run. Boot itself is unaffected -- check with `limactl shell fedora-kde
+  -- systemctl is-active plasmalogin` if the CLI times out.
+
+  To get a shell instead of the desktop:
+  ------
+  limactl shell fedora-kde
+  ------
